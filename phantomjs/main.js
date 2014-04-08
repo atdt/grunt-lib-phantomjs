@@ -22,33 +22,38 @@ var options = JSON.parse(phantom.args[2] || {});
 // Default options.
 if (!options.timeout) { options.timeout = 5000; }
 
-// Keep track of the last time a client message was sent.
-var last = new Date();
+// Copy of Date.now, in case it is overridden by subsequent code.
+var dateNow = Date.now;
+
+// Abort if the page doesn't send any messages for a while.
+var handleTimeout = function () {
+  sendMessage('fail.timeout');
+  if (options.screenshot) {
+    page.render(['page-at-timeout-', dateNow(), '.jpg'].join(''));
+  }
+  phantom.exit();
+};
 
 // Messages are sent to the parent by appending them to the tempfile.
-var sendMessage = function(arg) {
-  var args = Array.isArray(arg) ? arg : [].slice.call(arguments);
-  last = new Date();
-  fs.write(tmpfile, JSON.stringify(args) + '\n', 'a');
-};
+var sendMessage = (function () {
+  var set = setTimeout,
+    clear = clearTimeout,
+    timer = set(handleTimeout, options.timeout);
+
+  return function(arg) {
+    var args = Array.isArray(arg) ? arg : [].slice.call(arguments);
+
+    clear(timer);
+    fs.write(tmpfile, JSON.stringify(args) + '\n', 'a');
+    timer = set(handleTimeout, options.timeout);
+  };
+}());
 
 // This allows grunt to abort if the PhantomJS version isn't adequate.
 sendMessage('private', 'version', phantom.version);
 
 // Create a new page.
 var page = require('webpage').create(options.page);
-
-// Abort if the page doesn't send any messages for a while.
-setInterval(function() {
-  if (new Date() - last > options.timeout) {
-    sendMessage('fail.timeout');
-    if (options.screenshot) {
-      page.render(['page-at-timeout-', Date.now(), '.jpg'].join(''));
-    }
-    phantom.exit();
-  }
-}, 100);
-
 
 // Inject bridge script into client page.
 var injected;
@@ -131,7 +136,7 @@ page.onLoadFinished = function(status) {
     // File loading failure.
     sendMessage('fail.load', url);
     if (options.screenshot) {
-      page.render(['page-at-timeout-', Date.now(), '.jpg'].join(''));
+      page.render(['page-at-timeout-', dateNow(), '.jpg'].join(''));
     }
     phantom.exit();
   }
